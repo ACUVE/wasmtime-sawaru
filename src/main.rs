@@ -93,8 +93,29 @@ fn load_module(engine: &Engine, path: impl AsRef<Path>) -> Result<Module> {
     Ok(module)
 }
 
+fn link_modules<'a, 'b>(
+    engine: &'a Engine,
+    modules: impl IntoIterator<Item = &'b (impl AsRef<str> + 'b, &'b Module)>,
+) -> Result<(Linker<SomeData>, Store<SomeData>)> {
+    let mut linker = Linker::new(&engine);
+    wasmtime_wasi::add_to_linker(&mut linker, |s: &mut SomeData| &mut s.wasi)?;
+
+    let wasi = WasiCtxBuilder::new()
+        .inherit_stdio()
+        // .inherit_args()?
+        .build();
+
+    // Create a WASI context and put it in a Store; all instances in the store
+    // share this context. `WasiCtxBuilder` provides a number of ways to
+    // configure what the target program will have access to.
+    let mut store = Store::new(&engine, SomeData { wasi });
+    for (module_name, module) in modules {
+        linker.module(&mut store, module_name.as_ref(), module)?;
+    }
+    Ok((linker, store))
+}
+
 fn main() -> Result<()> {
-    // let engine = Engine::new(&Config::new().consume_fuel(true))?;
     let engine = Engine::new(&Config::new().consume_fuel(false))?;
 
     let module = load_module(&engine, "target/wasm32-wasi/debug/wasm-test.wasm")?;
@@ -104,33 +125,9 @@ fn main() -> Result<()> {
         "../rust-wasm-test-lib/target/wasm32-unknown-unknown/release/rust-wasm-test-lib.wasm",
     )?;
 
-    for _ in 0..10 {
-        let (linker, mut store) = {
-            let start = std::time::Instant::now();
-
-            // Define the WASI functions globally on the `Config`.
-            // let engine = Engine::default();
-            let mut linker = Linker::new(&engine);
-            wasmtime_wasi::add_to_linker(&mut linker, |s: &mut SomeData| &mut s.wasi)?;
-
-            // Create a WASI context and put it in a Store; all instances in the store
-            // share this context. `WasiCtxBuilder` provides a number of ways to
-            // configure what the target program will have access to.
-            let wasi = WasiCtxBuilder::new()
-                .inherit_stdio()
-                // .inherit_args()?
-                .build();
-            let mut store = Store::new(&engine, SomeData { wasi });
-            // store.add_fuel(u64::MAX).unwrap();
-            linker.module(&mut store, "", &module)?;
-            linker.module(&mut store, "", &module2)?;
-            linker.module(&mut store, "", &module3)?;
-
-            let elapsed = start.elapsed();
-            println!("Linker created in {:?}", elapsed);
-
-            (linker, store)
-        };
+    for _ in 0..2 {
+        let (linker, mut store) =
+            link_modules(&engine, &[("", &module), ("", &module2), ("", &module3)])?;
 
         let wasi_default_func = linker
             .get_default(&mut store, "")?
