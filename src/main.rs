@@ -95,22 +95,34 @@ fn load_module(engine: &Engine, path: impl AsRef<Path>) -> Result<Module> {
 
 fn link_modules<'a, 'b>(
     engine: &'a Engine,
-    modules: impl IntoIterator<Item = &'b (impl AsRef<str> + 'b, &'b Module)>,
+    modules: impl IntoIterator<Item = &'b (impl AsRef<str> + 'b, &'b Module)> + 'b,
 ) -> Result<(Linker<SomeData>, Store<SomeData>)> {
     let mut linker = Linker::new(&engine);
     wasmtime_wasi::add_to_linker(&mut linker, |s: &mut SomeData| &mut s.wasi)?;
 
-    let wasi = WasiCtxBuilder::new()
-        .inherit_stdio()
-        // .inherit_args()?
-        .build();
+    let wasi = WasiCtxBuilder::new().inherit_stdio().build();
 
-    // Create a WASI context and put it in a Store; all instances in the store
-    // share this context. `WasiCtxBuilder` provides a number of ways to
-    // configure what the target program will have access to.
     let mut store = Store::new(&engine, SomeData { wasi });
     for (module_name, module) in modules {
-        linker.module(&mut store, module_name.as_ref(), module)?;
+        let module_name = module_name.as_ref();
+        println!("Linking module: {}", module_name);
+        for import in module.imports() {
+            println!(
+                "Import: {}.{}: {:?}",
+                import.module(),
+                import.name(),
+                import.ty()
+            );
+        }
+        for export in module.exports() {
+            println!(
+                "Export: {}.{}: {:?}",
+                module_name,
+                export.name(),
+                export.ty()
+            );
+        }
+        linker.module(&mut store, module_name, module)?;
     }
     Ok((linker, store))
 }
