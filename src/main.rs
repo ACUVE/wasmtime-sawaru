@@ -10,16 +10,26 @@ struct SomeData {
     wasi: WasiCtx,
 }
 
-fn benchmark<T>(mut func: impl FnMut() -> T, times: usize) -> (std::time::Duration, Vec<T>) {
-    let mut buf = Vec::with_capacity(times);
+use func::*;
 
-    let start = std::time::Instant::now();
-    for _ in 0..times {
-        buf.push(func());
-    }
-    let ret = start.elapsed();
-
-    (ret, buf)
+fn get_typed_function_from_linker<T, Params, Results, S>(
+    linker: &Linker<T>,
+    module_name: &str,
+    name: &str,
+    store: &mut S,
+) -> Result<TypedFunc<Params, Results>>
+where
+    Params: WasmParams,
+    Results: WasmResults,
+    S: AsContextMut<Data = T>,
+{
+    let func = linker
+        .get(store.as_context_mut(), module_name, name)
+        .ok_or_else(|| anyhow::anyhow!("Could not find function"))?
+        .into_func()
+        .ok_or_else(|| anyhow::anyhow!("Could not convert to function"))?
+        .typed::<Params, Results, _>(store.as_context())?;
+    Ok(func)
 }
 
 fn tekito_wasi_module(engine: &Engine) -> Result<Module> {
@@ -128,36 +138,15 @@ fn main() -> Result<()> {
 
         wasi_default_func.call(&mut store, ())?;
 
-        let func = linker
-            .get(&mut store, "", "gcd")
-            .unwrap()
-            .into_func()
-            .unwrap()
-            .typed::<(i32, i32), i32, _>(&store)?;
-        let read_a = linker
-            .get(&mut store, "", "a")
-            .unwrap()
-            .into_func()
-            .unwrap()
-            .typed::<(), i32, _>(&store)?;
-        let read_b = linker
-            .get(&mut store, "", "b")
-            .unwrap()
-            .into_func()
-            .unwrap()
-            .typed::<(), i32, _>(&store)?;
-        let read_c = linker
-            .get(&mut store, "", "c")
-            .unwrap()
-            .into_func()
-            .unwrap()
-            .typed::<(), u64, _>(&store)?;
-        let is_prime_wasm = linker
-            .get(&mut store, "", "is_prime")
-            .unwrap()
-            .into_func()
-            .unwrap()
-            .typed::<(u64,), i32, _>(&store)?;
+        let func = get_typed_function_from_linker::<_, (i32, i32), i32, _>(
+            &linker, "", "gcd", &mut store,
+        )?;
+        let read_a = get_typed_function_from_linker::<_, (), i32, _>(&linker, "", "a", &mut store)?;
+        let read_b = get_typed_function_from_linker::<_, (), i32, _>(&linker, "", "b", &mut store)?;
+        let read_c = get_typed_function_from_linker::<_, (), u64, _>(&linker, "", "c", &mut store)?;
+        let is_prime_wasm = get_typed_function_from_linker::<_, (u64,), i32, _>(
+            &linker, "", "is_prime", &mut store,
+        )?;
         let a = read_a.call(&mut store, ())?;
         let b = read_b.call(&mut store, ())?;
         let c = read_c.call(&mut store, ())?;
@@ -168,7 +157,7 @@ fn main() -> Result<()> {
         let (elapsed, buff) = benchmark(|| func.call(&mut store, (a, b)).unwrap(), 10000000);
         println!("gcd_wasm({}, {}) = {}, time = {:?}", a, b, buff[0], elapsed);
 
-        let (elapsed, buff) = benchmark(|| func::gcd(a, b), 10000000);
+        let (elapsed, buff) = benchmark(|| gcd(a, b), 10000000);
         println!("gcd_rust({}, {}) = {}, time = {:?}", a, b, buff[0], elapsed);
 
         let (elapsed, buff) = benchmark(|| is_prime_wasm.call(&mut store, (c,)).unwrap(), 10000000);
@@ -185,10 +174,10 @@ fn main() -> Result<()> {
             elapsed
         );
 
-        let (elapsed, buff) = benchmark(|| func::is_prime(c), 10000000);
+        let (elapsed, buff) = benchmark(|| is_prime(c), 10000000);
         println!("is_prime_rust({}) = {:?}, time = {:?}", c, buff[0], elapsed);
 
-        let (elapsed, buff) = benchmark(|| func::is_prime(c + 1), 10000000);
+        let (elapsed, buff) = benchmark(|| is_prime(c + 1), 10000000);
         println!(
             "is_prime_rust({}) = {:?}, time = {:?}",
             c + 1,

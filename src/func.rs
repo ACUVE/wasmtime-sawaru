@@ -23,3 +23,18 @@ pub(super) fn is_prime(target: u64) -> Option<bool> {
         }
     }
 }
+
+pub(super) fn benchmark<T>(
+    mut func: impl FnMut() -> T,
+    times: usize,
+) -> (std::time::Duration, Vec<T>) {
+    let mut buf = Vec::with_capacity(times);
+
+    let start = std::time::Instant::now();
+    for _ in 0..times {
+        buf.push(func());
+    }
+    let ret = start.elapsed();
+
+    (ret, buf)
+}
